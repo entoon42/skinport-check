@@ -1,9 +1,10 @@
-name: Skinport Tagescheck
+name: Skinport Daily Check
 
 on:
   schedule:
-    - cron: "0 7 * * *"   # jeden Tag 07:00 UTC (= 9 Uhr Sommerzeit / 8 Uhr Winterzeit)
-  workflow_dispatch:       # manueller Start zum Testen
+    - cron: "0 20 * * *"          # every day at 20:00
+      timezone: "Europe/Berlin"   # local time, daylight saving handled automatically
+  workflow_dispatch:              # manual trigger for testing
 
 jobs:
   lookup:
@@ -13,43 +14,44 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Abhaengigkeiten installieren
+      - name: Install dependencies
         run: pip install requests brotli
 
-      - name: Preis abfragen und Push senden
+      - name: Fetch price and send push notification
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           python - <<'EOF'
           import os, requests
 
-          NAME = "M4A4 | The Coalition (Minimal Wear)"
+          ITEM_NAME = "M4A4 | The Coalition (Minimal Wear)"
           CURRENCY = "EUR"
 
-          r = requests.get(
+          # Skinport requires Brotli compression for this endpoint
+          response = requests.get(
               "https://api.skinport.com/v1/items",
               params={"app_id": 730, "currency": CURRENCY},
               headers={"Accept-Encoding": "br"},
               timeout=60,
           )
-          r.raise_for_status()
-          it = next((i for i in r.json() if i["market_hash_name"] == NAME), None)
+          response.raise_for_status()
+          item = next((i for i in response.json() if i["market_hash_name"] == ITEM_NAME), None)
 
-          headers = {"Title": "M4A4 The Coalition (MW)", "Tags": "moneybag"}
+          headers = {"Title": "M4A4 | The Coalition (MW)", "Tags": "moneybag"}
 
-          if not it or it.get("min_price") is None:
-              msg = "Aktuell kein Angebot auf Skinport."
+          if not item or item.get("min_price") is None:
+              message = "No listings on Skinport right now."
           else:
-              msg = f"Günstigstes Angebot: {it['min_price']:.2f} {CURRENCY}\n{it['quantity']} Angebote online"
-              if it.get("median_price"):
-                  msg += f"\nMedian: {it['median_price']:.2f} {CURRENCY}"
-              if it.get("item_page"):
-                  headers["Click"] = it["item_page"]  # Tippen auf Push oeffnet Skinport
+              message = f"Lowest price: {item['min_price']:.2f} {CURRENCY}\n{item['quantity']} listings available"
+              if item.get("median_price"):
+                  message += f"\nMedian: {item['median_price']:.2f} {CURRENCY}"
+              if item.get("item_page"):
+                  headers["Click"] = item["item_page"]  # tapping the notification opens Skinport
 
-          print(msg)
+          print(message)
           requests.post(
               f"https://ntfy.sh/{os.environ['NTFY_TOPIC']}",
-              data=msg.encode("utf-8"),
+              data=message.encode("utf-8"),
               headers=headers,
               timeout=30,
           ).raise_for_status()
