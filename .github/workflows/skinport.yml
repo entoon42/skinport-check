@@ -1,0 +1,56 @@
+name: Skinport Tagescheck
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # jeden Tag 07:00 UTC (= 9 Uhr Sommerzeit / 8 Uhr Winterzeit)
+  workflow_dispatch:       # manueller Start zum Testen
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhaengigkeiten installieren
+        run: pip install requests brotli
+
+      - name: Preis abfragen und Push senden
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          python - <<'EOF'
+          import os, requests
+
+          NAME = "M4A4 | The Coalition (Minimal Wear)"
+          CURRENCY = "EUR"
+
+          r = requests.get(
+              "https://api.skinport.com/v1/items",
+              params={"app_id": 730, "currency": CURRENCY},
+              headers={"Accept-Encoding": "br"},
+              timeout=60,
+          )
+          r.raise_for_status()
+          it = next((i for i in r.json() if i["market_hash_name"] == NAME), None)
+
+          headers = {"Title": "M4A4 The Coalition (MW)", "Tags": "moneybag"}
+
+          if not it or it.get("min_price") is None:
+              msg = "Aktuell kein Angebot auf Skinport."
+          else:
+              msg = f"Günstigstes Angebot: {it['min_price']:.2f} {CURRENCY}\n{it['quantity']} Angebote online"
+              if it.get("median_price"):
+                  msg += f"\nMedian: {it['median_price']:.2f} {CURRENCY}"
+              if it.get("item_page"):
+                  headers["Click"] = it["item_page"]  # Tippen auf Push oeffnet Skinport
+
+          print(msg)
+          requests.post(
+              f"https://ntfy.sh/{os.environ['NTFY_TOPIC']}",
+              data=msg.encode("utf-8"),
+              headers=headers,
+              timeout=30,
+          ).raise_for_status()
+          EOF
