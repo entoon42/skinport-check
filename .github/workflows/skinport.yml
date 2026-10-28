@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests brotli
 
-      - name: Fetch prices and send push notification
+      - name: Fetch prices and send push notifications
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
@@ -26,10 +26,10 @@ jobs:
 
           CURRENCY = "EUR"
 
-          # (short label for buttons, exact Skinport market name)
+          # (short label, exact Skinport market name, threshold in EUR)
           ITEMS = [
-              ("M4A4", "M4A4 | The Coalition (Minimal Wear)"),
-              ("Talon", "★ Talon Knife | Damascus Steel (Field-Tested)"),
+              ("M4A4", "M4A4 | The Coalition (Minimal Wear)", 500),
+              ("Talon", "★ Talon Knife | Damascus Steel (Field-Tested)", 400),
           ]
 
           # Skinport requires Brotli compression for this endpoint
@@ -42,34 +42,35 @@ jobs:
           response.raise_for_status()
           data = {i["market_hash_name"]: i for i in response.json()}
 
-          blocks = []
-          actions = []
-          for label, name in ITEMS:
+          for label, name, threshold in ITEMS:
               item = data.get(name)
               if not item or item.get("min_price") is None:
-                  blocks.append(f"{name}\nNo listings right now.")
+                  print(f"{name}: no listings, skipping notification.")
                   continue
 
-              line = f"Lowest: {item['min_price']:.2f} {CURRENCY}"
+              price = item["min_price"]
+              if price <= threshold:
+                  print(f"{name}: {price:.2f} {CURRENCY} <= {threshold}, skipping notification.")
+                  continue
+
+              message = f"{name}\nLowest: {price:.2f} {CURRENCY}"
               if item.get("median_price"):
-                  line += f" | Median: {item['median_price']:.2f} {CURRENCY}"
-              line += f"\n{item['quantity']} listings"
-              blocks.append(f"{name}\n{line}")
+                  message += f" | Median: {item['median_price']:.2f} {CURRENCY}"
+              message += f"\n{item['quantity']} listings"
+              print(message)
 
+              # Header values must be ASCII/Latin-1, so no € symbol here
+              headers = {
+                  "Title": f"{label} above {threshold} {CURRENCY}",
+                  "Tags": "moneybag",
+              }
               if item.get("item_page"):
-                  actions.append(f"view, Open {label}, {item['item_page']}")
+                  headers["Actions"] = f"view, Open {label}, {item['item_page']}"
 
-          message = "\n\n".join(blocks)
-          print(message)
-
-          headers = {"Title": "Skinport Daily Prices", "Tags": "moneybag"}
-          if actions:
-              headers["Actions"] = "; ".join(actions)  # one button per item
-
-          requests.post(
-              f"https://ntfy.sh/{os.environ['NTFY_TOPIC']}",
-              data=message.encode("utf-8"),
-              headers=headers,
-              timeout=30,
-          ).raise_for_status()
+              requests.post(
+                  f"https://ntfy.sh/{os.environ['NTFY_TOPIC']}",
+                  data=message.encode("utf-8"),
+                  headers=headers,
+                  timeout=30,
+              ).raise_for_status()
           EOF
